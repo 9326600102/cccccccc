@@ -86,8 +86,10 @@ jobs:
         if [ -z "$BUILDOZER_DIR" ]; then
           echo "BUILDOZER_DIR is not set. Exiting."; exit 1
         fi
-        cat > $BUILDOZER_DIR/download.py <<'PY'
+        # Write download.py using an inline Python script to avoid heredoc indentation issues
+        python3 - <<'PY'
 import os
+content = '''import os
 import subprocess
 import sys
 
@@ -104,8 +106,12 @@ def download(url, filename, report_hook=None):
         report_hook(filesize // 1024, 1024, filesize)
         report_hook(filesize // 1024, filesize % 1024, filesize)
     return filename, None
+'''
+p = os.path.join(os.environ['BUILDOZER_DIR'], 'download.py')
+with open(p, 'w', encoding='utf-8') as f:
+    f.write(content)
+print('Created patched download.py file successfully!')
 PY
-        echo "Created patched download.py file successfully!"
 
     - name: Modify buildozer __init__.py to use patched download function
       run: |
