@@ -1,0 +1,149 @@
+# Build Android APK (Ultimate Solution)
+# 修复内容：添加 workflow_dispatch 输入 `url`，并在工作流中使用 `${{ github.event.inputs.url }}`
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Optional download URL used by build steps (leave empty if not needed)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 180
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          build-essential \
+          ccache \
+          git \
+          libncurses5:i386 \
+          libstdc++6:i386 \
+          libgtk2.0-0:i386 \
+          libpangox-1.0-0:i386 \
+          libpangoxft-1.0-0:i386 \
+          libidn11:i386 \
+          python3 \
+          python3-pip \
+          python3-setuptools \
+          python3-wheel \
+          curl \
+          wget \
+          zip \
+          unzip \
+          openjdk-11-jdk-headless
+
+    - name: Create build directory
+      run: mkdir -p $GITHUB_WORKSPACE/kivy_app/bin
+
+    - name: Create buildozer.spec file
+      run: |
+        echo "[app]" > $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "title = License Plate Recognition" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "package.name = licenseplaterecognition" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "package.domain = org.example" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "source.dir = ." >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "source.include_exts = py,png,jpg,kv" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "requirements = python3,kivy==2.0.0,opencv-python,numpy,pillow" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "orientation = landscape" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "[android]" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "android.permissions = CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "android.api = 31" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "android.minapi = 21" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "android.ndk = 23.1.7779620" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "android.use_androidx = True" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+        echo "fullscreen = 0" >> $GITHUB_WORKSPACE/kivy_app/buildozer.spec
+
+    - name: Install buildozer and dependencies
+      run: |
+        pip3 install --upgrade pip
+        pip3 install buildozer==1.2.0 cython==0.29.21
+
+    - name: Find buildozer installation location
+      id: buildozer_path
+      run: |
+        BUILDOZER_PATH=$(python3 -c "import buildozer; print(buildozer.__file__)")
+        BUILDOZER_DIR=$(dirname $BUILDOZER_PATH)
+        echo "BUILDOZER_DIR=$BUILDOZER_DIR" >> $GITHUB_ENV
+        echo "Buildozer found at: $BUILDOZER_DIR"
+
+    - name: Export provided URL (if any)
+      run: |
+        echo "DOWNLOAD_URL=${{ github.event.inputs.url }}" >> $GITHUB_ENV
+        echo "DOWNLOAD_URL set to: '${{ github.event.inputs.url }}'"
+
+    - name: Create patched download.py file
+      run: |
+        # Use BUILDOZER_DIR from env
+        if [ -z "$BUILDOZER_DIR" ]; then
+          echo "BUILDOZER_DIR is not set. Exiting."; exit 1
+        fi
+        cat > $BUILDOZER_DIR/download.py <<'PY'
+import os
+import subprocess
+import sys
+
+def download(url, filename, report_hook=None):
+    """Download a file using wget, bypassing urlretrieve."""
+    print(f"Downloading {url} to {filename}")
+    result = subprocess.run(["wget", "-O", filename, url], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error downloading {url}: {result.stderr}")
+        sys.exit(1)
+    if report_hook:
+        filesize = os.path.getsize(filename)
+        report_hook(0, 1024, filesize)
+        report_hook(filesize // 1024, 1024, filesize)
+        report_hook(filesize // 1024, filesize % 1024, filesize)
+    return filename, None
+PY
+        echo "Created patched download.py file successfully!"
+
+    - name: Modify buildozer __init__.py to use patched download function
+      run: |
+        if [ -z "$BUILDOZER_DIR" ]; then
+          echo "BUILDOZER_DIR is not set. Exiting."; exit 1
+        fi
+        # Try to replace urlretrieve import with our patched download; use python to patch safely
+        python3 - <<'PY'
+import io,sys,os
+p = os.path.join(os.environ['BUILDOZER_DIR'],'__init__.py')
+with open(p,'r',encoding='utf-8') as f:
+    s = f.read()
+if 'from urllib.request import urlretrieve' in s:
+    s = s.replace('from urllib.request import urlretrieve','from .download import download as urlretrieve')
+    with open(p,'w',encoding='utf-8') as f:
+        f.write(s)
+    print('Patched __init__.py to use bundled download')
+else:
+    print('__init__.py did not contain the expected import; manual check recommended')
+PY
+
+    - name: Build APK
+      working-directory: $GITHUB_WORKSPACE/kivy_app
+      env:
+        BUILDOZER_NO_DOWNLOAD: 1
+        DOWNLOAD_URL: ${{ github.event.inputs.url }}
+      run: |
+        buildozer android debug -v
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: license-plate-recognition-apk
+        path: ${{ github.workspace }}/kivy_app/bin/*.apk
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-logs
+        path: ${{ github.workspace }}/kivy_app/*.log
