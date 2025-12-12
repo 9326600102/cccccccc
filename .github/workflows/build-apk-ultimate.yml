@@ -88,30 +88,30 @@ jobs:
         fi
         # Write download.py using an inline Python script to avoid heredoc indentation issues
         python3 - <<'PY'
-import os
-content = '''import os
-import subprocess
-import sys
+    import os
+    content = """import os
+    import subprocess
+    import sys
 
-def download(url, filename, report_hook=None):
-    """Download a file using wget, bypassing urlretrieve."""
-    print(f"Downloading {url} to {filename}")
-    result = subprocess.run(["wget", "-O", filename, url], capture_output=True, text=True)
-    if result.returncode != 0:
+    def download(url, filename, report_hook=None):
+      """Download a file using wget, bypassing urlretrieve."""
+      print(f"Downloading {url} to {filename}")
+      result = subprocess.run(["wget", "-O", filename, url], capture_output=True, text=True)
+      if result.returncode != 0:
         print(f"Error downloading {url}: {result.stderr}")
         sys.exit(1)
-    if report_hook:
+      if report_hook:
         filesize = os.path.getsize(filename)
         report_hook(0, 1024, filesize)
         report_hook(filesize // 1024, 1024, filesize)
         report_hook(filesize // 1024, filesize % 1024, filesize)
-    return filename, None
-'''
-p = os.path.join(os.environ['BUILDOZER_DIR'], 'download.py')
-with open(p, 'w', encoding='utf-8') as f:
-    f.write(content)
-print('Created patched download.py file successfully!')
-PY
+      return filename, None
+    """
+    p = os.path.join(os.environ['BUILDOZER_DIR'], 'download.py')
+    with open(p, 'w', encoding='utf-8') as f:
+      f.write(content)
+    print('Created patched download.py file successfully!')
+    PY
 
     - name: Modify buildozer __init__.py to use patched download function
       run: |
